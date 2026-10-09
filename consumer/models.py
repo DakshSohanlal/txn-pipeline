@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, StrictInt, StringConstraints, field_validator
 
 # Subset of ISO 4217 codes the mock app supports.
 SUPPORTED_CURRENCIES = {"GBP", "EUR", "USD", "PLN", "AED", "CHF"}

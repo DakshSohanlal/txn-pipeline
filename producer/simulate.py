@@ -5,6 +5,7 @@ idempotency and dead-letter handling can be demonstrated.
 
 Usage:  python -m producer.simulate --count 500 --rate 20
 """
+
 import argparse
 import json
 import os

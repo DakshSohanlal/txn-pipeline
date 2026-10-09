@@ -3,6 +3,7 @@
 Offsets are committed only AFTER the DB transaction commits (at-least-once delivery);
 ON CONFLICT DO NOTHING makes re-delivery harmless.
 """
+
 import logging
 import os
 

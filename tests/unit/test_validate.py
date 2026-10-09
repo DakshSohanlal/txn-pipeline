@@ -34,7 +34,9 @@ def test_accepts_json_bytes():
     assert ev.type == "card"
 
 
-@pytest.mark.parametrize("field", ["event_id", "user_id", "type", "amount_minor", "currency", "occurred_at"])
+@pytest.mark.parametrize(
+    "field", ["event_id", "user_id", "type", "amount_minor", "currency", "occurred_at"]
+)
 def test_missing_required_field_is_rejected(field):
     raw = make_event()
     del raw[field]
