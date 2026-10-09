@@ -1,4 +1,5 @@
 # txn-pipeline
+![CI](https://github.com/DakshSohanlal/txn-pipeline/actions/workflows/ci.yml/badge.svg)
 
 Event-driven transaction pipeline for a mock payments app.
 
