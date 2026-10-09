@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff",
+    "ms-azuretools.vscode-docker",
+    "cweijan.vscode-postgresql-client2",
+    "redhat.vscode-yaml",
+    "eamodio.gitlens",
+    "ms-kubernetes-tools.vscode-kubernetes-tools"
+  ]
+}
