@@ -31,3 +31,16 @@ and view the `transactions.dlq` topic in Redpanda Console.
 - **At-least-once delivery:** offsets committed only after the DB commit.
 - **Bad messages** go to `transactions.dlq` with an `error_reason` header instead of blocking the stream.
 - **Validation is a pure function** (`consumer/validate.py`) so it is fast to unit test.
+
+## Demo
+
+The producer deliberately injects ~2% duplicate and ~2% malformed events. The consumer
+inserts each valid event exactly once and routes bad messages to a dead-letter topic with the failure reason.
+
+**Postgres after 500 unique events (duplicates ignored, malformed rejected):**
+
+![Postgres counts](docs/postgres-counts.png)
+
+**Dead-letter topic with `error_reason` header:**
+
+![DLQ message](docs/dlq-message.png)
