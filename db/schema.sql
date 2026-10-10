@@ -30,3 +30,5 @@ CREATE TABLE IF NOT EXISTS anomalies (
   ratio NUMERIC(10, 2) NOT NULL,
   PRIMARY KEY (user_id, currency, day)
 );
+-- GET /anomalies filters and sorts by day
+CREATE INDEX IF NOT EXISTS idx_anomalies_day ON anomalies (day DESC);
