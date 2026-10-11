@@ -17,6 +17,17 @@ services:
       timeout: 5s
       retries: 10
 
+  # Creates the topics once Redpanda is healthy, then exits.
+  redpanda-init:
+    image: redpandadata/redpanda:v24.2.7
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - rpk -X brokers=redpanda:29092 topic create transactions.raw transactions.dlq || true
+    restart: "no"
+
   redpanda-console:
     image: redpandadata/console:v2.7.2
     environment:
@@ -43,6 +54,56 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  consumer:
+    build: .
+    command: ["python", "-m", "consumer.main"]
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:29092
+      DATABASE_URL: postgresql://txn:txn@postgres:5432/txn
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql://txn:txn@postgres:5432/txn
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Not started by `docker compose up`. Run it on demand:
+  #   docker compose run --rm producer
+  #   docker compose run --rm producer --count 5000 --rate 500 --spike-rate 0.005
+  producer:
+    build: .
+    profiles: ["tools"]
+    entrypoint: ["python", "-m", "producer.simulate"]
+    command: ["--count", "2000", "--rate", "200", "--spike-rate", "0.005"]
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:29092
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
 
   # Airflow in "standalone" mode: webserver + scheduler in one container, SQLite metadata DB.
   # Fine for a demo; production would use Postgres metadata + LocalExecutor/Celery/Kubernetes.

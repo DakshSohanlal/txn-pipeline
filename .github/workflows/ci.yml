@@ -12,4 +12,13 @@ jobs:
           cache: pip
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
-      - run: pytest tests/unit --cov=consumer --cov=pipeline --cov-report=term-missing
+      - run: pytest tests/unit --cov=consumer --cov=pipeline --cov=api --cov-report=term-missing
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose config --quiet
+      - name: Build application image
+        run: docker build -t txn-pipeline .
