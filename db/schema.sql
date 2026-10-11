@@ -9,7 +9,10 @@ CREATE TABLE IF NOT EXISTS transactions (
   occurred_at TIMESTAMPTZ NOT NULL,
   ingested_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- GET /users/{id}/spending
 CREATE INDEX IF NOT EXISTS idx_txn_user_time ON transactions (user_id, occurred_at);
+-- daily batch job scans a time window across all users
+CREATE INDEX IF NOT EXISTS idx_txn_occurred_at ON transactions (occurred_at);
 
 CREATE TABLE IF NOT EXISTS daily_spend (
   user_id TEXT NOT NULL,
