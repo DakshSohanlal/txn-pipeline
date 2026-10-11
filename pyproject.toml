@@ -1,6 +1,9 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+  "integration: needs a real PostgreSQL (docker compose up -d postgres)",
+]
 
 [tool.ruff]
 line-length = 100
