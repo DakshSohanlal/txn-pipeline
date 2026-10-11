@@ -1,12 +1,4 @@
 services:
-  redpanda-init:
-    image: redpandadata/redpanda:v24.2.7
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["rpk -X brokers=redpanda:29092 topic create transactions.raw transactions.dlq || true"]
-    restart: "no" 
   redpanda:
     image: redpandadata/redpanda:v24.2.7
     command:
@@ -51,6 +43,26 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Airflow in "standalone" mode: webserver + scheduler in one container, SQLite metadata DB.
+  # Fine for a demo; production would use Postgres metadata + LocalExecutor/Celery/Kubernetes.
+  # Needs roughly 2 GB RAM. Run `docker compose stop airflow` to free it.
+  airflow:
+    build: ./airflow
+    command: ["airflow", "standalone"]
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      DATABASE_URL: postgresql://txn:txn@postgres:5432/txn
+      PYTHONPATH: /opt/airflow/project
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./pipeline:/opt/airflow/project/pipeline:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:

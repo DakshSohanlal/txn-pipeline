@@ -1,7 +1,7 @@
 """Postgres implementation of the job's Store."""
 
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 
 import psycopg
 
@@ -12,6 +12,20 @@ LOAD_SQL = """
 SELECT user_id, currency, amount_minor, occurred_at, merchant_category
 FROM transactions
 WHERE occurred_at >= %s AND occurred_at < %s
+"""
+
+TXN_TOTALS_SQL = """
+SELECT currency, SUM(amount_minor)::bigint, COUNT(*)
+FROM transactions
+WHERE occurred_at >= %s AND occurred_at < %s
+GROUP BY currency
+"""
+
+SPEND_TOTALS_SQL = """
+SELECT currency, SUM(total_minor)::bigint, SUM(txn_count)::bigint
+FROM daily_spend
+WHERE day = %s
+GROUP BY currency
 """
 
 
@@ -76,3 +90,17 @@ class PostgresStore:
                     for a in anomalies
                 ],
             )
+
+    def transaction_totals(self, day: date) -> dict[str, tuple[int, int]]:
+        """Per-currency (total_minor, count) from the raw transactions for one UTC day."""
+        start = datetime.combine(day, time.min, tzinfo=UTC)
+        return self._totals(TXN_TOTALS_SQL, (start, start + timedelta(days=1)))
+
+    def daily_spend_totals(self, day: date) -> dict[str, tuple[int, int]]:
+        """Per-currency (total_minor, count) from the aggregated daily_spend table."""
+        return self._totals(SPEND_TOTALS_SQL, (day,))
+
+    def _totals(self, sql: str, params: tuple) -> dict[str, tuple[int, int]]:
+        with self._conn.cursor() as cur:
+            cur.execute(sql, params)
+            return {code: (int(total), int(count)) for code, total, count in cur.fetchall()}

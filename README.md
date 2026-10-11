@@ -6,10 +6,10 @@ An event-driven transaction pipeline for a mock payments app. It ingests simulat
 transfer events through Kafka, validates and stores them idempotently in PostgreSQL, builds daily
 spend aggregates with a simple anomaly rule, and serves the results through a REST API.
 
-**Stack:** Python 3.12 · Redpanda (Kafka-compatible) · PostgreSQL · FastAPI · pytest · Docker Compose · GitHub Actions
+**Stack:** Python 3.12 · Redpanda (Kafka-compatible) · PostgreSQL · Apache Airflow · FastAPI · pytest · Docker Compose · GitHub Actions
 
-> **Status:** ingestion, validation, daily aggregation, anomaly detection and the REST API are
-> built and tested. Airflow scheduling is next (see [Roadmap](#roadmap)).
+> **Status:** ingestion, validation, daily aggregation, anomaly detection, the Airflow DAG and the
+> REST API are built and tested. Containerising the consumer and API is next (see [Roadmap](#roadmap)).
 
 ## Architecture
 
@@ -19,7 +19,7 @@ flowchart LR
   K --> C["Consumer<br/>validate + idempotent write"]
   C -->|valid| T[("PostgreSQL<br/>transactions")]
   C -->|invalid| D[("transactions.dlq<br/>with error_reason header")]
-  T --> J["Batch job<br/>daily aggregates + anomaly rule"]
+  T --> J["Airflow DAG (daily)<br/>aggregates + anomaly rule, then reconciliation"]
   J --> R[("PostgreSQL<br/>daily_spend, anomalies")]
   T --> A["FastAPI"]
   R --> A
@@ -33,7 +33,9 @@ flowchart LR
 2. **Consumer** (`consumer/main.py`) validates each event, writes valid ones to PostgreSQL
    idempotently, and routes invalid ones to a dead-letter topic with the failure reason attached.
 3. **Batch job** (`pipeline/job.py`) computes daily spend per user, currency and merchant category,
-   and flags days where a user's spend is more than 3x their trailing 30-day average.
+   and flags days where a user's spend is more than 3x their trailing 30-day average. An **Airflow
+   DAG** (`dags/daily_spend_dag.py`) runs it daily, then a reconciliation task checks that the
+   aggregates add up to the raw transactions and fails the run if they do not.
 4. **API** (`api/`) exposes spending and anomaly data over REST.
 
 ## Quick start
@@ -69,6 +71,26 @@ python -m pipeline.job --day 2026-10-11 --backfill 28
 # start the API, then open http://localhost:8000/docs
 uvicorn api.main:app --reload
 ```
+
+### Airflow
+
+`docker compose up -d` also builds and starts Airflow (needs about 2 GB of RAM; run
+`docker compose stop airflow` to free it). The UI is at http://localhost:8081, user `admin`.
+
+```powershell
+# password for the admin user
+docker compose exec airflow cat /opt/airflow/standalone_admin_password.txt
+
+# check the DAG parsed, then run one day end to end without the scheduler
+docker compose exec airflow airflow dags list-import-errors
+docker compose exec airflow airflow dags test daily_spend_and_anomalies 2026-10-11
+
+# backfill a range of days
+docker compose exec airflow airflow dags backfill -s 2026-10-01 -e 2026-10-11 daily_spend_and_anomalies
+```
+
+The DAG has two tasks: `build_aggregates` runs the batch job for the run's day, and `reconcile`
+compares `daily_spend` with the raw transactions per currency and fails the run on any difference.
 
 ## API
 
@@ -111,6 +133,12 @@ never reached the table.
 - **Logic is separated from I/O.** Validation, aggregation and anomaly detection are pure
   functions with no Kafka, database or HTTP code, which makes them fast to unit test. The job and
   API depend on small interfaces (`Store`, `Repository`), so tests use in-memory fakes.
+- **The Airflow DAG is a thin wrapper.** All logic lives in `pipeline/` and is unit tested without
+  Airflow; the DAG only schedules it and passes in the run's logical day. Tasks are safe to retry
+  and re-run because the job replaces results rather than appending.
+- **Reconciliation as a data-quality gate.** After each build, per-currency totals and counts from
+  `daily_spend` are compared with the raw `transactions` for the same UTC day. Any difference fails
+  the run with no retries, since the data disagrees and a person needs to look.
 - **The batch job is idempotent.** Each run replaces the 30-day window in `daily_spend` and the
   target day in `anomalies`, in one transaction, so re-running a day or backfilling never duplicates
   rows, and late-arriving events are picked up on the next run.
@@ -147,10 +175,12 @@ lint and tests on every push.
 txn-pipeline/
 ├── producer/       simulate.py          event generator
 ├── consumer/       models, validate, db, main
-├── pipeline/       aggregates, anomalies, job, store
+├── pipeline/       aggregates, anomalies, reconcile, job, store
+├── dags/           daily_spend_dag.py   Airflow DAG
+├── airflow/        Dockerfile           Airflow image with the Postgres driver
 ├── api/            main, schemas, service, repository
 ├── db/             schema.sql
-├── tests/unit/     validation, aggregation, anomalies, job, API
+├── tests/unit/     validation, aggregation, anomalies, reconciliation, job, API
 ├── docs/           screenshots
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
@@ -161,6 +191,10 @@ txn-pipeline/
 - The batch job loads a 30-day window into Python and aggregates there. This is fine at demo scale;
   at real volume the `GROUP BY` would move into SQL.
 - The API opens one database connection per request. A connection pool would be the next step.
+- Airflow runs in `standalone` mode with a SQLite metadata database and the sequential executor.
+  That is fine for a demo and resets when the container is recreated; production would use a
+  Postgres metadata database and a LocalExecutor, Celery or Kubernetes executor. The DAG targets
+  Airflow 2.11; moving to Airflow 3 is a one-line import change (`airflow.sdk`).
 - There is no authentication, and all data is simulated.
 - A single consumer process is used. Scaling out means more partitions and consumers in one group.
 - There are no integration tests against a real database yet. The unit tests use fakes, which is how
@@ -168,7 +202,8 @@ txn-pipeline/
 
 ## Roadmap
 
-- [ ] Airflow DAG to schedule the daily job
+- [x] Airflow DAG to schedule the daily job, with a reconciliation check
+- [ ] Run the consumer and API as containers, so `docker compose up` starts everything
 - [ ] Integration tests against a real PostgreSQL instance
 - [ ] Kubernetes manifests (kind or minikube) for the API and consumer
 - [ ] GCP deployment (Cloud Run for the API, or load aggregates into BigQuery)
