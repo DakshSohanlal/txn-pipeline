@@ -92,6 +92,25 @@ docker compose exec airflow airflow dags backfill -s 2026-10-01 -e 2026-10-11 da
 The DAG has two tasks: `build_aggregates` runs the batch job for the run's day, and `reconcile`
 compares `daily_spend` with the raw transactions per currency and fails the run on any difference.
 
+### Kubernetes
+
+The `k8s/` folder has manifests that run the whole pipeline on a local cluster (tested on
+Docker Desktop's built-in Kubernetes): Postgres, Redpanda, the consumer, and two replicas of the
+API with readiness and liveness probes, all with resource requests and limits. A CronJob runs the
+daily aggregation; Airflow is not deployed to the cluster, so the CronJob covers scheduling there.
+
+```powershell
+docker build -t txn-pipeline:local .
+kubectl apply -f k8s/00-namespace.yaml
+kubectl create configmap postgres-schema --from-file=schema.sql=db/schema.sql -n txn
+kubectl apply -f k8s/
+kubectl create -f k8s/optional/producer-job.yaml        # generate events
+kubectl create -f k8s/optional/backfill-job.yaml        # build aggregates (edit the dates first)
+kubectl port-forward svc/api 8000:8000 -n txn           # then open http://localhost:8000/docs
+```
+
+![Kubernetes pods](docs/kubernetes-pods.png)
+
 ## API
 
 | Endpoint | Description |
