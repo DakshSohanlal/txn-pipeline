@@ -1,0 +1,32 @@
+# Build aggregates for a range of days. Edit --day (the last day) and --backfill (how many days),
+# then run:  kubectl create -f k8s/optional/backfill-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: backfill-
+  namespace: txn
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: job
+          image: txn-pipeline:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "pipeline.job"]
+          args: ["--day", "2026-10-11", "--backfill", "28"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: app-secrets, key: DATABASE_URL}
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}

@@ -1,0 +1,30 @@
+# Generate test events. Run with:  kubectl create -f k8s/optional/producer-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: producer-
+  namespace: txn
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: producer
+          image: txn-pipeline:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "producer.simulate"]
+          args: ["--count", "2000", "--rate", "200", "--spike-rate", "0.005"]
+          env:
+            - name: KAFKA_BOOTSTRAP
+              value: redpanda:9092
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}

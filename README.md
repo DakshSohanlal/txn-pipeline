@@ -8,9 +8,8 @@ spend aggregates with a simple anomaly rule, and serves the results through a RE
 
 **Stack:** Python 3.12 · Redpanda (Kafka-compatible) · PostgreSQL · Apache Airflow · FastAPI · pytest · Docker Compose · GitHub Actions
 
-> **Status:** the full pipeline runs from `docker compose up`: ingestion, validation, daily
-> aggregation, anomaly detection, an Airflow DAG and the REST API, with unit tests and CI. See the
-> [Roadmap](#roadmap) for what is left.
+> **Status:** ingestion, validation, daily aggregation, anomaly detection, the Airflow DAG and the
+> REST API are built and tested. Containerising the consumer and API is next (see [Roadmap](#roadmap)).
 
 ## Architecture
 
@@ -41,83 +40,57 @@ flowchart LR
 
 ## Quick start
 
-Requires Docker Desktop with about 4 GB of RAM allocated (Airflow is the heavy part).
+Requires Docker Desktop and Python 3.11 or 3.12. (The newest Python releases may not have
+prebuilt `confluent-kafka` wheels yet.)
 
 ```powershell
 git clone https://github.com/DakshSohanlal/txn-pipeline.git
 cd txn-pipeline
-docker compose up -d --build
+python -m venv .venv
+.venv\Scripts\Activate.ps1          # macOS/Linux: source .venv/bin/activate
+pip install -r requirements-dev.txt
+copy .env.example .env              # macOS/Linux: cp .env.example .env
+
+docker compose up -d                # Redpanda, Redpanda Console (localhost:8080), PostgreSQL
+docker compose exec redpanda rpk topic create transactions.raw transactions.dlq
+pytest tests/unit                   # run the test suite
 ```
 
-That builds the app image and starts everything:
-
-| Service | What it is | Where |
-|---|---|---|
-| `redpanda` | Kafka-compatible broker | `localhost:9092` |
-| `redpanda-init` | Creates the topics, then exits | |
-| `redpanda-console` | Browse topics, messages and the DLQ | http://localhost:8080 |
-| `postgres` | Transactions, daily aggregates, anomalies | `localhost:5432` |
-| `consumer` | Validates events, writes to Postgres, routes bad ones to the DLQ | |
-| `api` | FastAPI service | http://localhost:8000/docs |
-| `airflow` | Schedules the daily job | http://localhost:8081 (user `admin`) |
-| `producer` | Event generator, run on demand (see below) | |
-
-### Try it
+### Run the pipeline
 
 ```powershell
-# 1. generate events: 2,000 by default, including duplicates, malformed events and large purchases
-docker compose run --rm producer
-#    or choose your own volume
-docker compose run --rm producer --count 5000 --rate 500 --spike-rate 0.005
+# terminal 1: start the consumer
+python -m consumer.main
 
-# 2. check the consumer has written them
-docker compose exec postgres psql -U txn -c "select count(*) from transactions;"
+# terminal 2: generate events (5,000 events, ~0.5% large purchases)
+python -m producer.simulate --count 5000 --rate 500 --spike-rate 0.005
 
-# 3. build aggregates and anomalies with Airflow (use dates that match your data)
-docker compose exec airflow airflow dags backfill -s 2026-10-01 -e 2026-10-11 daily_spend_and_anomalies
+# when the consumer has caught up, compute aggregates and anomalies (adjust the date)
+python -m pipeline.job --day 2026-10-11 --backfill 28
 
-# 4. query the API at http://localhost:8000/docs
+# start the API, then open http://localhost:8000/docs
+uvicorn api.main:app --reload
 ```
 
 ### Airflow
 
-The admin password is generated on first start:
+`docker compose up -d` also builds and starts Airflow (needs about 2 GB of RAM; run
+`docker compose stop airflow` to free it). The UI is at http://localhost:8081, user `admin`.
 
 ```powershell
+# password for the admin user
 docker compose exec airflow cat /opt/airflow/standalone_admin_password.txt
-```
 
-Other useful commands:
-
-```powershell
 # check the DAG parsed, then run one day end to end without the scheduler
 docker compose exec airflow airflow dags list-import-errors
 docker compose exec airflow airflow dags test daily_spend_and_anomalies 2026-10-11
+
+# backfill a range of days
+docker compose exec airflow airflow dags backfill -s 2026-10-01 -e 2026-10-11 daily_spend_and_anomalies
 ```
 
 The DAG has two tasks: `build_aggregates` runs the batch job for the run's day, and `reconcile`
 compares `daily_spend` with the raw transactions per currency and fails the run on any difference.
-
-![Airflow DAG runs](docs/airflow-dag.png)
-
-![Airflow DAG graph](docs/airflow-graph.png)
-
-Airflow is the heaviest service. Free its memory with `docker compose stop airflow`.
-
-### Developing without containers for the apps
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1          # macOS/Linux: source .venv/bin/activate
-pip install -r requirements-dev.txt   # Python 3.11 or 3.12
-pytest tests/unit
-
-docker compose stop consumer api      # free the ports and the Kafka consumer group
-python -m consumer.main               # in one terminal
-python -m producer.simulate --count 5000 --rate 500 --spike-rate 0.005   # in another
-python -m pipeline.job --day 2026-10-11 --backfill 28
-uvicorn api.main:app --reload
-```
 
 ## API
 
@@ -148,6 +121,10 @@ never reached the table.
 
 ![Anomalies endpoint](docs/api-anomalies.png)
 
+![Airflow DAG runs](docs/airflow-dag.png)
+
+![Airflow DAG graph](docs/airflow-graph.png)
+
 ## Design decisions
 
 - **Money is stored as integer minor units** (pence, cents), never floats, so there is no rounding drift.
@@ -173,6 +150,11 @@ never reached the table.
   `occurred_at` serves the batch job's window scan, and `anomalies(day)` serves the anomalies endpoint.
 - **All SQL is parameterised.** The only interpolated parts are fixed column names.
 
+**Index check.** `EXPLAIN ANALYZE` on the spending query for one user over two days uses
+`idx_txn_user_time` (bitmap index scan, about 0.2 ms) instead of scanning the table.
+
+![EXPLAIN output](docs/explain-index.png)
+
 ### Anomaly rule
 
 For each `(user, currency)`, a day is flagged if its total spend is **strictly more than 3x** the
@@ -194,7 +176,9 @@ pytest tests/unit --cov=consumer --cov=pipeline --cov=api
 
 Unit tests cover event validation, aggregation, anomaly detection, the batch job (against a fake
 store) and the API (against a fake repository). They were written test-first. GitHub Actions runs
-lint and tests on every push, and a second job validates the compose file and builds the image.
+lint and tests on every push.
+
+Integration tests run against a real PostgreSQL (docker compose up -d postgres, then pytest tests/integration); CI runs them against a Postgres service container.
 
 ## Project structure
 
@@ -209,7 +193,6 @@ txn-pipeline/
 ├── db/             schema.sql
 ├── tests/unit/     validation, aggregation, anomalies, reconciliation, job, API
 ├── docs/           screenshots
-├── Dockerfile      one image for the consumer, API and producer
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
 ```
@@ -225,13 +208,10 @@ txn-pipeline/
   Airflow 2.11; moving to Airflow 3 is a one-line import change (`airflow.sdk`).
 - There is no authentication, and all data is simulated.
 - A single consumer process is used. Scaling out means more partitions and consumers in one group.
-- There are no integration tests against a real database yet. The unit tests use fakes, which is how
-  a missing-commit bug in the batch job's Postgres layer got past them and was found by running it.
 
 ## Roadmap
 
 - [x] Airflow DAG to schedule the daily job, with a reconciliation check
 - [x] Run the consumer and API as containers, so `docker compose up` starts everything
-- [ ] Integration tests against a real PostgreSQL instance
-- [ ] Kubernetes manifests (kind or minikube) for the API and consumer
-- [ ] GCP deployment (Cloud Run for the API, or load aggregates into BigQuery)
+- [x] Integration tests against a real PostgreSQL instance
+- [x] Kubernetes manifests (kind or minikube) for the API and consumer

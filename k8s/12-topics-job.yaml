@@ -1,0 +1,25 @@
+# Runs once: waits for the broker, then creates the topics (the Compose `redpanda-init`).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-topics
+  namespace: txn
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+      containers:
+        - name: rpk
+          image: redpandadata/redpanda:v24.2.7
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until rpk -X brokers=redpanda:9092 cluster info >/dev/null 2>&1; do
+                echo "waiting for redpanda"; sleep 3
+              done
+              rpk -X brokers=redpanda:9092 topic create transactions.raw transactions.dlq || true
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}

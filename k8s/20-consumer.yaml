@@ -1,0 +1,56 @@
+# Image is built locally:  docker build -t txn-pipeline:local .
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumer
+  namespace: txn
+  labels:
+    app: consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consumer
+  template:
+    metadata:
+      labels:
+        app: consumer
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      initContainers:
+        - name: wait-for-dependencies
+          image: txn-pipeline:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-c"]
+          args:
+            - |
+              import socket, time
+              for host, port in [("postgres", 5432), ("redpanda", 9092)]:
+                  while True:
+                      try:
+                          socket.create_connection((host, port), 2).close()
+                          break
+                      except OSError:
+                          time.sleep(2)
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+      containers:
+        - name: consumer
+          image: txn-pipeline:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "consumer.main"]
+          env:
+            - name: KAFKA_BOOTSTRAP
+              value: redpanda:9092
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: app-secrets, key: DATABASE_URL}
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}

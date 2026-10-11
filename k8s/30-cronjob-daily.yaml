@@ -1,0 +1,37 @@
+# Kubernetes' counterpart of the Airflow schedule: build yesterday's aggregates every day at 01:00 UTC.
+# The job is idempotent, so a retry or a manual re-run never duplicates rows.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-aggregates
+  namespace: txn
+spec:
+  schedule: "0 1 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          enableServiceLinks: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+          containers:
+            - name: job
+              image: txn-pipeline:local
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-m", "pipeline.job"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef: {name: app-secrets, key: DATABASE_URL}
+              securityContext:
+                allowPrivilegeEscalation: false
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {memory: 256Mi}
